@@ -30,7 +30,7 @@ sudo systemctl restart mosquitto.service
 
 ## Install The dongle
 
-## Flash the newest coordinator firmware
+### Flash the newest coordinator firmware
 
 https://darkxst.github.io/silabs-firmware-builder/#zbdongle-e
 
