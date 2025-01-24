@@ -2,17 +2,19 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"sync"
 	"strconv"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	_ "github.com/lib/pq"
 )
 
 // {"battery":100,"contact":false,"linkquality":204,"update":{"installed_version":16777241,"latest_version":16777241,"state":"idle"}}
@@ -107,9 +109,35 @@ func listen(client mqtt.Client, uri *url.URL, topic string) {
 		// # TODO(janbrucek)(20250117) Configurable!
 		http.Post("http://192.168.1.102:4242/api/put", "application/json", bytes.NewReader(marshalled))
 
+		storeInPostgres(parsedPayload.Contact)
+
 		// fmt.Printf("* [%s] %s\n", msg.Topic(), string(msg.Payload()))
 	})
 }
+
+func storeInPostgres(doorClosed bool) {
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", DbHost, DbPort, DbUser, DbPassword, DbName)
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		log.Printf("Could not connect to the database: %v", err)
+		return
+	}
+	defer db.Close()
+
+	_, err = db.Exec("INSERT INTO metrics (created_at, metric_name, metric_value) VALUES (NOW(), 'door_closed', $1)", doorClosed)
+	if err != nil {
+		log.Printf("Could not insert into the database: %v", err)
+		return
+	}
+}
+
+const (
+	DbHost     = "localhost"
+	DbPort     = 5432
+	DbUser     = "mqtt2tsdb"
+	DbPassword = ""
+	DbName     = "mqtt2tsdb"
+)
 
 func main() {
 	var wg sync.WaitGroup
