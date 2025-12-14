@@ -1,16 +1,21 @@
 package main
 
 import (
-	"flag"
+	"gonum.org/v1/plot"
+	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/plotutil"
+	"gonum.org/v1/plot/vg"
 	"image"
 	"image/png"
 	"log"
+	"math/rand"
 	"os"
 	"periph.io/x/conn/v3/gpio/gpioreg"
 	"periph.io/x/conn/v3/i2c/i2creg"
 	"periph.io/x/conn/v3/spi/spireg"
 	"periph.io/x/devices/v3/inky"
 	"periph.io/x/host/v3"
+	"time"
 )
 
 // sudo raspi-config nonint do_i2c 0
@@ -61,70 +66,70 @@ func ClearDisplay() {
 	//}
 }
 
-func SetImageOnInky(path *string) {
+func SetImageOnInky(dev *inky.Dev, path *string) error {
 
 	f, err := os.Open(*path)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("%s", err)
+		return err
 	}
 	defer f.Close()
 
 	img, err := png.Decode(f)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("%s", err)
+		return err
 	}
-
-	dev := initialiseInkyWhat()
 
 	log.Printf("Bounds %v", dev.Bounds())
 	log.Printf("Bounds %v", img.Bounds())
 
 	if err := dev.Draw(img.Bounds(), img, image.Point{}); err != nil {
-		log.Fatal(err)
+		log.Printf("%s", err)
+		return err
 	}
+
+	return nil
 }
 
 // randomPoints returns some random x, y points.
-//func randomPoints(n int) plotter.XYs {
-//	pts := make(plotter.XYs, n)
-//	for i := range pts {
-//		if i == 0 {
-//			pts[i].X = rand.Float64()
-//		} else {
-//			pts[i].X = pts[i-1].X + rand.Float64()
-//		}
-//		pts[i].Y = pts[i].X + 10*rand.Float64()
-//	}
-//	return pts
-//}
+func randomPoints(n int) plotter.XYs {
+	pts := make(plotter.XYs, n)
+	for i := range pts {
+		if i == 0 {
+			pts[i].X = rand.Float64()
+		} else {
+			pts[i].X = pts[i-1].X + rand.Float64()
+		}
+		pts[i].Y = pts[i].X + 10*rand.Float64()
+	}
+	return pts
+}
 
-//func genImage() {
-//	p := plot.New()
-//
-//	p.Title.Text = "Plotutil example"
-//	p.X.Label.Text = "X"
-//	p.Y.Label.Text = "Y"
-//
-//	err := plotutil.AddLinePoints(p,
-//		"First", randomPoints(15),
-//		"Second", randomPoints(15),
-//		"Third", randomPoints(15))
-//	if err != nil {
-//		panic(err)
-//	}
-//
-//	// Save the plot to a PNG file.
-//	//if err := p.Save(vg.Points(300), vg.Points(225), "points.png"); err != nil {
-//	//	panic(err)
-//	//}
-//	if err := betterSave(p, vg.Points(300), vg.Points(225), "points.png"); err != nil {
-//		panic(err)
-//	}
-//
-//	time.Sleep(2 * time.Second)
-//	log.Printf("Saved plot to points.png")
-//
-//}
+func genImage() {
+	p := plot.New()
+
+	p.Title.Text = "Plotutil example"
+	p.X.Label.Text = "X"
+	p.Y.Label.Text = "Y"
+
+	err := plotutil.AddLinePoints(p,
+		"First", randomPoints(15),
+		"Second", randomPoints(15),
+		"Third", randomPoints(15))
+	if err != nil {
+		panic(err)
+	}
+
+	// Save the plot to a PNG file.
+	if err := p.Save(vg.Points(300), vg.Points(225), "points.png"); err != nil {
+		panic(err)
+	}
+	//if err := betterSave(p, vg.Points(300), vg.Points(225), "points.png"); err != nil {
+	//	panic(err)
+	//}
+	log.Printf("Saved plot to points.png")
+}
 
 //func betterSave(p *plot.Plot, w vg.Length, h vg.Length, file string) error {
 //	f, err := os.Create(file)
@@ -155,16 +160,28 @@ func SetImageOnInky(path *string) {
 func ptr(s string) *string { return &s }
 
 func main() {
-	path := flag.String("image", "", "Path to image file (400x300) to display")
-	flag.Parse()
+	//path := flag.String("image", "", "Path to image file (400x300) to display")
+	//flag.Parse()
 
 	//path := strings.Clone("points.png")
 
-	//genImage()
-	//SetImageOnInky(ptr("prdoch.png"))
-	if path != nil {
-		SetImageOnInky(path)
-	} else {
-		ClearDisplay()
+	dev := initialiseInkyWhat()
+
+	genImage()
+
+	err := SetImageOnInky(dev, ptr("points.png"))
+	for err != nil {
+		time.Sleep(1 * time.Second)
+		log.Printf("Retrying store")
+		err = SetImageOnInky(dev, ptr("points.png"))
 	}
+
+	//for err := ; err != nil {
+	//	err = SetImageOnInky(ptr("prdoch.png"))
+	//}
+	//if path != nil {
+	//	SetImageOnInky(path)
+	//} else {
+	//	ClearDisplay()
+	//}
 }
