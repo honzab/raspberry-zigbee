@@ -11,6 +11,9 @@ My initial goal (as of January 2025) was to get MQTT running and connect an [IKE
 ## Install the OS
 
   todo
+```bash
+sudo apt install vim jq
+```
 
 ## Install Mosquitto
 

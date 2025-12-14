@@ -15,6 +15,10 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	_ "github.com/lib/pq"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // {"battery":100,"contact":false,"linkquality":204,"update":{"installed_version":16777241,"latest_version":16777241,"state":"idle"}}
@@ -111,8 +115,56 @@ func listen(client mqtt.Client, uri *url.URL, topic string) {
 
 		storeInPostgres(parsedPayload.Contact)
 
+		if !parsedPayload.Contact {
+			pushoverDoorPush()
+		}
+
 		// fmt.Printf("* [%s] %s\n", msg.Topic(), string(msg.Payload()))
 	})
+}
+
+type PushoverNotification struct {
+	Token    string `json:"token"`
+	User     string `json:"user"`
+	Message  string `json:"message"`
+	Priority int16  `json:"priority"`
+}
+
+func pushoverDoorPush() {
+	marshalledNotification, err := json.Marshal(PushoverNotification{
+		Token:    "",
+		User:     "",
+		Message:  "Door open!",
+		Priority: 0,
+	})
+	if err != nil {
+		log.Printf("Could not marshal the pushover notification")
+		return
+	}
+	r, err := http.Post("https://api.pushover.net/1/messages.json", "application/json", bytes.NewReader(marshalledNotification))
+	if err != nil {
+		log.Printf("Could not post to pushover")
+		return
+	}
+	log.Printf("%v+\n, ", r)
+}
+
+func loadLatestFromPostgres() bool {
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", DbHost, DbPort, DbUser, DbPassword, DbName)
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		log.Printf("Could not connect to the database: %v", err)
+		return true // Assume the door is closed
+	}
+	defer db.Close()
+
+	var doorClosed bool
+	err = db.QueryRow("SELECT metric_value FROM metrics WHERE metric_name = $1 ORDER BY created_at DESC LIMIT 1", "door_closed").Scan(&doorClosed)
+	if err != nil {
+		log.Printf("Could not insert into the database: %v", err)
+		return true // Assume the door is closed
+	}
+	return doorClosed
 }
 
 func storeInPostgres(doorClosed bool) {
@@ -139,9 +191,32 @@ const (
 	DbName     = "mqtt2tsdb"
 )
 
+type metrics struct {
+	doorClosedState prometheus.Gauge
+}
+
+func NewMetrics(reg prometheus.Registerer) *metrics {
+	m := &metrics{
+		// Create a summary to track fictional inter service RPC latencies for three
+		// distinct services with different latency distributions. These services are
+		// differentiated via a "service" label.
+		doorClosedState: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "door_closed",
+				Help: "Whether the door is closed or not",
+			},
+		),
+	}
+	reg.MustRegister(m.doorClosedState)
+	return m
+}
+
 func main() {
 	var wg sync.WaitGroup
 	// TODO(janbrucek)(20250117) Make this configurable better
+	// $ export CLOUDMQTT_URL=mqtt://localhost:1883/zigbee2mqtt/maindoor
+	// $ ./mqtt2tsdb
+
 	uri, err := url.Parse(os.Getenv("CLOUDMQTT_URL"))
 
 	client := connect("sub", uri)
@@ -171,6 +246,32 @@ func main() {
 		log.Printf("Listening to %s as %s", topic, topicsAndNames[topic])
 		go simpleListen(client, uri, topic, topicsAndNames[topic])
 	}
+
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+
+	initState := loadLatestFromPostgres()
+	if initState {
+		log.Printf("Door is closed")
+		m.doorClosedState.Set(1)
+	} else {
+		log.Printf("Door is open")
+		m.doorClosedState.Set(0)
+	}
+
+	// Add Go module build info.
+	reg.MustRegister(collectors.NewBuildInfoCollector())
+
+	http.Handle("/metrics", promhttp.HandlerFor(
+		reg,
+		promhttp.HandlerOpts{
+			// Opt into OpenMetrics to support exemplars.
+			EnableOpenMetrics: true,
+			// Pass custom registry
+			Registry: reg,
+		},
+	))
+	log.Fatal(http.ListenAndServe(":8081", nil))
 
 	wg.Wait()
 }
